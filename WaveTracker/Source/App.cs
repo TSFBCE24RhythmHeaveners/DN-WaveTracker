@@ -203,7 +203,7 @@ namespace WaveTracker {
                 }
                 if (!ffmpegPathSet || (os == "win7" || os == "linux")) {
                     string path = os == "win7" ? Environment.GetEnvironmentVariable("PATH") : Environment.GetEnvironmentVariable("LD_LIBRARY_PATH");
-                    string[] pathDirectories = path.Split(';', StringSplitOptions.RemoveEmptyEntries);
+                    string[] pathDirectories = os == "win7" ? path.Split(';', StringSplitOptions.RemoveEmptyEntries) : Directory.GetFiles(path);
                     for (int i = 0; i < pathDirectories.Length; i++) {
                         if (Path.GetFileName(pathDirectories[i]).Contains("ffmpeg", StringComparison.OrdinalIgnoreCase)) {
                             ffmpeg.RootPath = pathDirectories[i];

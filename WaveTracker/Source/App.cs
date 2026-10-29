@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Abstractions;
 using System.Runtime.InteropServices;
 using WaveTracker.Audio;
 using WaveTracker.Rendering;
@@ -191,11 +192,29 @@ namespace WaveTracker {
                     : OperatingSystem.IsLinux() ? "linux"
                     : OperatingSystem.IsMacOS() ? "osx"
                     : throw new PlatformNotSupportedException();
-                ffmpeg.RootPath = Path.Combine(assemblyDirectory, "runtimes", $"{os}-{arch}", "native");
-
-                if (OperatingSystem.IsWindows()) {
-                    // Windows is incapable of finding the FFmpeg libraries if we don't do this.
-                    Environment.SetEnvironmentVariable("PATH", Environment.GetEnvironmentVariable("PATH") + ";" + ffmpeg.RootPath);
+                string ffmpegPath = Path.Combine(assemblyDirectory, "runtimes", $"{os}-{arch}", "native");
+                string[] ffmpegPathFiles = Directory.GetFiles(ffmpegPath);
+                bool ffmpegPathSet = false;
+                for (int i = 0; i < ffmpegPathFiles.Length; i++) {
+                    if (Path.GetFileName(ffmpegPathFiles[i]).Contains("swresample", StringComparison.OrdinalIgnoreCase)) {
+                        ffmpeg.RootPath = ffmpegPath;
+                        if (os == "win7") {
+                            // Windows is incapable of finding the FFmpeg libraries if we don't do this.
+                            Environment.SetEnvironmentVariable("PATH", Environment.GetEnvironmentVariable("PATH") + ";" + ffmpeg.RootPath);
+                        }
+                        ffmpegPathSet = true;
+                        break;
+                    }
+                }
+                if (!ffmpegPathSet || (os == "win7" || os == "linux")) {
+                    string path = os == "win7" ? Environment.GetEnvironmentVariable("PATH") : Environment.GetEnvironmentVariable("LD_LIBRARY_PATH");
+                    string[] pathDirectories = os == "win7" ? path.Split(';', StringSplitOptions.RemoveEmptyEntries) : Directory.GetFiles(path);
+                    for (int i = 0; i < pathDirectories.Length; i++) {
+                        if (Path.GetFileName(pathDirectories[i]).Contains("ffmpeg", StringComparison.OrdinalIgnoreCase)) {
+                            ffmpeg.RootPath = pathDirectories[i];
+                            break;
+                        }
+                    }
                 }
             }
 

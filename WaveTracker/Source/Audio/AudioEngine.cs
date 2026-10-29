@@ -100,8 +100,15 @@ namespace WaveTracker.Audio {
             audioCommandChannel.Writer.TryWrite(AudioCommand.SetSampleRate);
             foreach (Channel chan in ChannelManager.Channels) {
                 chan.UpdateFilter();
+                chan.UpdateIR(-1, -1, -1);
+                chan.SetDelay(0);
             }
-            ChannelManager.PreviewChannel.UpdateFilter();
+
+            foreach (Channel pc in ChannelManager.PreviewChannels) {
+                pc.UpdateFilter();
+                pc.UpdateIR(-1, -1, -1);
+                pc.SetDelay(0);
+            }
         }
 
         /// <summary>
@@ -332,9 +339,12 @@ namespace WaveTracker.Audio {
                 }
 
                 if (!IsRendering) {
-                    ChannelManager.PreviewChannel.ProcessSingleSample(out l, out r, delta);
-                    leftSum += l;
-                    rightSum += r;
+                    foreach (Channel pc in ChannelManager.PreviewChannels) {
+                        pc.ProcessSingleSample(out l, out r, delta);
+                        leftSum += l;
+                        rightSum += r;
+                    }
+
                 }
                 left = leftSum;
                 right = rightSum;
@@ -370,7 +380,10 @@ namespace WaveTracker.Audio {
                 foreach (Channel c in ChannelManager.Channels) {
                     c.NextTick();
                 }
-                ChannelManager.PreviewChannel.NextTick();
+
+                foreach (Channel pc in ChannelManager.PreviewChannels) {
+                    pc.NextTick();
+                }
             }
 
         }
@@ -418,6 +431,7 @@ namespace WaveTracker.Audio {
         None,
         Linear,
         Mix,
+        Smb,
     }
     public enum SampleRate {
         _11025,

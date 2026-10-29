@@ -232,7 +232,7 @@ namespace WaveTracker {
         /// <returns></returns>
         public static bool IsEffectHex(char effectType) {
             return effectType switch {
-                '0' or '4' or '7' or 'Q' or 'R' or 'H' => true,
+                '0' or '4' or '7' or '5' or 'Q' or 'R' or 'H' => true,
                 _ => false,
             };
         }
@@ -249,6 +249,8 @@ namespace WaveTracker {
                 "Automatically glide between notes at speed xx. Use 300 to disable"),
                 '4' => ("4xy", "Vibrato", "(speed, depth)",
                 "Modulates pitch with speed x and depth y. Use 400 to disable"),
+                '5' => ("5xy", "Delay", "(length, decay)",
+                "Apply delau effect with delay legth x and decay y. Use 500 to disable"),
                 '7' => ("7xy", "Tremolo", "(speed, depth)",
                 "Modulates volume with speed x and depth y. Use 700 to disable"),
                 '8' => ("8xx", "Pan", "(position)",
@@ -287,6 +289,8 @@ namespace WaveTracker {
                 "Bends the current note down by y semitones at speed x"),
                 'S' => ("Sxx", "Delayed cut", "(ticks)",
                 "Cuts the note after xx ticks have passed."),
+                'T' => ("Txx", "IR convolution", "(index)",
+                "Applies the IR response defined by the wave instrument xx."),
                 'V' => ("Vxx", "Set wave", "(wave #)",
                 "Sets the channel's timbre to wave xx in the wave bank"),
                 'X' => ("Xxx", "Downsample", "(intensity)",

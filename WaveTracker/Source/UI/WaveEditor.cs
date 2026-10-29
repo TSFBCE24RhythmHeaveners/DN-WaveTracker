@@ -23,6 +23,7 @@ namespace WaveTracker.UI {
         private MouseRegion drawingRegion;
         private bool displayAsLines;
         private WaveModifyDialog currentDialog;
+        private int[] _notesArray = new int[ChannelManager.PreviewChannels.Count];
 
         private static Wave CurrentWave {
             get {
@@ -177,8 +178,10 @@ namespace WaveTracker.UI {
                 }
 
                 //Temp fix for PreviewChannel wave being changed when song is played
-                if (ChannelManager.PreviewChannel.WaveIndex != id && !ChannelManager.PreviewChannel.CurrentInstrument.HasEnvelope(Envelope.EnvelopeType.Wave)) {
-                    ChannelManager.PreviewChannel.SetWave(id);
+                foreach (Channel pc in ChannelManager.PreviewChannels) {
+                    if (pc.WaveIndex != id && !pc.CurrentInstrument.HasEnvelope(Envelope.EnvelopeType.Wave)) {
+                        pc.SetWave(id);
+                    }
                 }
 
                 resampleDropdown.Value = (int)CurrentWave.resamplingMode;
@@ -388,8 +391,8 @@ namespace WaveTracker.UI {
                 // draw wave 
                 if (displayAsLines) {
                     for (int i = 0; i < drawingRegion.width; ++i) {
-                        int y1 = drawingRegion.y + drawingRegion.height / 2 - (int)(CurrentWave.GetSampleAtPosition(i / (float)drawingRegion.width) * drawingRegion.height / 2) - 3;
-                        int y2 = drawingRegion.y + drawingRegion.height / 2 - (int)(CurrentWave.GetSampleAtPosition((i + 1) / (float)drawingRegion.width) * drawingRegion.height / 2) - 3;
+                        int y1 = drawingRegion.y + drawingRegion.height / 2 - (int)(CurrentWave.GetSampleAtPosition(i / (float)drawingRegion.width, null) * drawingRegion.height / 2) - 3;
+                        int y2 = drawingRegion.y + drawingRegion.height / 2 - (int)(CurrentWave.GetSampleAtPosition((i + 1) / (float)drawingRegion.width, null) * drawingRegion.height / 2) - 3;
                         if (y1 > y2) {
                             y1++;
                             y2++;
@@ -436,7 +439,18 @@ namespace WaveTracker.UI {
                         }
                     }
                 }
-                piano.Draw(PianoInput.CurrentNote);
+
+                int ii = 0;
+                foreach (var n in PianoInput.CurrentlyHeldDownNotes) {
+                    this._notesArray[ii] = n.Key + n.Value.Channel.envelopePlayers[Envelope.EnvelopeType.Arpeggio].Value;
+                    ii++;
+                }
+
+                for (; ii < this._notesArray.Length; ii++) {
+                    this._notesArray[ii] = -1;
+                }
+
+                piano.Draw(this._notesArray);
                 WriteRightAlign("Resampling Mode", resampleDropdown.x - 4, resampleDropdown.y + 4, UIColors.label);
                 resampleDropdown.Draw();
             }

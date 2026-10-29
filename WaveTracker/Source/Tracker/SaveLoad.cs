@@ -220,7 +220,9 @@ namespace WaveTracker {
             WaveBank.lastSelectedWave = 0;
             ChannelManager.Reset();
             ChannelManager.UnmuteAllChannels();
-            ChannelManager.PreviewChannel.SetWave(0);
+            foreach (Channel pc in ChannelManager.PreviewChannels) {
+                pc.SetWave(0);
+            }
         }
 
         public static void SaveFileAsVoid() {
@@ -361,7 +363,9 @@ namespace WaveTracker {
                 Playback.Goto(0, 0);
                 ChannelManager.Reset();
                 ChannelManager.UnmuteAllChannels();
-                ChannelManager.PreviewChannel.SetWave(0);
+                foreach (Channel pc in ChannelManager.PreviewChannels) {
+                    pc.SetWave(0);
+                }
                 CurrentFilepath = path;
                 AddPathToRecentFiles(CurrentFilepath);
             }
@@ -448,15 +452,19 @@ namespace WaveTracker {
             }
         }
 
-        private static Dictionary<string, string> fileDialogFilters = new() {
+        public static Dictionary<string, string> fileDialogFilters = new() {
             {"WaveTracker modules", "wtm"},
         };
 
-        private static Dictionary<string, string> wavDialogFilters = new() {
+        public static Dictionary<string, string> soundFontDialogFilters = new() {
+            {"Sound Font SF2 files", "sf2"},
+        };
+
+        public static Dictionary<string, string> wavDialogFilters = new() {
             {"Waveform Audio File Format", "wav"},
         };
 
-        private static Dictionary<string, string> themeDialogFilters = new() {
+        public static Dictionary<string, string> themeDialogFilters = new() {
             {"WaveTraker Theme", "wttheme"},
         };
 
@@ -464,7 +472,7 @@ namespace WaveTracker {
         /// Opens a file browser and asks the user to choose a wtm file. (Open)
         /// </summary>
         /// <returns>true if they choose a file and accept, false otherwise.</returns>
-        private static bool SetFilePathThroughOpenDialog(out string filepath) {
+        public static bool SetFilePathThroughOpenDialog(out string filepath, Dictionary<string, string>? filters = null) {
             bool didIt = false;
             string ret = "";
             filepath = CurrentFilepath;
@@ -474,7 +482,7 @@ namespace WaveTracker {
                     Input.CancelClick();
 
                     string initialDir = ReadPath("openwtm", Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
-                    NfdStatus status = Nfd.OpenDialog(out string openPath, fileDialogFilters, initialDir);
+                    NfdStatus status = Nfd.OpenDialog(out string openPath, filters ?? fileDialogFilters, initialDir);
 
                     if (status == NfdStatus.Ok) {
                         ret = openPath;
@@ -643,19 +651,13 @@ namespace WaveTracker {
                 Thread t = new Thread(() => {
                     Input.DialogStarted();
                     Input.CancelClick();
-                    // OpenFileDialog openFileDialog = new OpenFileDialog();
-                    // openFileDialog.InitialDirectory = ThemeFolderPath;
-                    // openFileDialog.CheckPathExists = true;
-                    // openFileDialog.Filter = "WaveTracker Theme (*.wttheme)|*.wttheme";
-                    // openFileDialog.Multiselect = false;
-                    // openFileDialog.Title = "Open";
-                    // openFileDialog.ValidateNames = true;
 
-                    // if (openFileDialog.ShowDialog() == DialogResult.OK) {
-                    //     ret = openFileDialog.FileName;
-                    //     didIt = true;
-                    // }
+                    NfdStatus status = Nfd.OpenDialog(out string themePath, themeDialogFilters, SaveLoad.ThemeFolderPath);
 
+                    if (status == NfdStatus.Ok) {
+                        ret = themePath;
+                        didIt = true;
+                    }
                 });
 
                 if (OperatingSystem.IsWindows())
@@ -665,7 +667,6 @@ namespace WaveTracker {
                 t.Start();
                 t.Join();
                 filepath = ret;
-
             }
             return didIt;
         }

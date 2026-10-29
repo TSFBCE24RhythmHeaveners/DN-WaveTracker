@@ -53,11 +53,12 @@ namespace WaveTracker.UI {
         private Dropdown resamplingMode;
         private Dropdown loopMode;
         private NumberBox loopPoint;
+        private NumberBox loopLength;
         private SampleBrowser browser;
         private CheckboxLabeled showInVisualizer;
         private int lastMouseHoverSample;
         private ScrollbarHorizontal viewportScrollbar;
-        private SpriteButton undo, redo, delete, zoomIn, zoomOut, zoomInVertical, zoomOutVertical, fadeIn, fadeOut, reverse;
+        private SpriteButton undo, redo, delete, crop, zoomIn, zoomOut, zoomInVertical, zoomOutVertical, fadeIn, fadeOut, reverse;
         private DropdownButton tools;
 
         public new bool InFocus => base.InFocus || Dialogs.currentSampleModifyDialog != null && Dialogs.currentSampleModifyDialog.InFocus;
@@ -89,8 +90,11 @@ namespace WaveTracker.UI {
             loopPoint = new NumberBox("Loop position (samples)", 154, 203, 186, 83, this);
             loopPoint.SetTooltip("", "Set the position in audio samples where the sound loops back to");
 
-            loopMode = new Dropdown(282, 188, this, false);
-            loopMode.SetMenuItems(["One-shot", "Forward", "Ping-pong"]);
+            loopLength = new NumberBox("Loop length (samples)", 154, 218, 186, 83, this);
+            loopLength.SetTooltip("", "Set the length of the loop. Zero for until sample end.");
+
+            loopMode = new Dropdown(232, 188, this, false);
+            loopMode.SetMenuItems(["One-shot", "Forward", "Ping-pong", "Forward Loop-only", "Ping-pong Loop-only"]);
 
             int buttonsX = 351;
             int buttonsY = 188;
@@ -103,6 +107,26 @@ namespace WaveTracker.UI {
             delete = new SpriteButton(buttonsX, buttonsY, 15, 15, 360, 0, this);
             delete.SetTooltip("Delete", "Delete the selected audio");
             buttonsX += 18;
+            crop = new SpriteButton(buttonsX, buttonsY, 15, 15, 375, 0, this);
+            crop.SetTooltip("Crop", "Crop to selected audio");
+            buttonsX += 18;
+            tools = new DropdownButton("Tools...", buttonsX, buttonsY, 50, this);
+            tools.SetMenuItems([
+                new DropdownButton.Option("Delete", () => SelectionIsActive),
+                new DropdownButton.Option("Crop", () => SelectionIsActive),
+                new DropdownButton.Option("Fade in",() => Sample.Length > 0),
+                new DropdownButton.Option("Fade out",() => Sample.Length > 0),
+                new DropdownButton.Option("Reverse",() => Sample.Length > 0),
+                new DropdownButton.Option("Invert",() => Sample.Length > 0),
+                new DropdownButton.Option("Normalize",() => Sample.Length > 0),
+                new DropdownButton.Option("Remove DC offset", () => Sample.Length > 0),
+                new DropdownButton.Option("Mix to mono", () => Sample.IsStereo),
+                new DropdownButton.Option("Amplify...", () => Sample.Length > 0),
+                new DropdownButton.Option("Bitcrush...", () => Sample.Length > 0)
+                ]);
+
+            buttonsX = 351;
+            buttonsY += 18;
             zoomIn = new SpriteButton(buttonsX, buttonsY, 15, 15, 465, 0, this);
             zoomIn.SetTooltip("Zoom in (horizontal)", "Zoom into the audio view horizontally");
             buttonsX += 15;
@@ -114,7 +138,9 @@ namespace WaveTracker.UI {
             buttonsX += 15;
             zoomOutVertical = new SpriteButton(buttonsX, buttonsY, 15, 15, 510, 0, this);
             zoomOutVertical.SetTooltip("Zoom out (vertical)", "Zoom out of the audio view vertically");
-            buttonsX += 18;
+
+            buttonsX = 351;
+            buttonsY += 18;
             fadeIn = new SpriteButton(buttonsX, buttonsY, 15, 15, 525, 0, this);
             fadeIn.SetTooltip("Fade in", "Apply a fade-in on the selected audio");
             buttonsX += 15;
@@ -124,20 +150,6 @@ namespace WaveTracker.UI {
             reverse = new SpriteButton(buttonsX, buttonsY, 15, 15, 555, 0, this);
             reverse.SetTooltip("Reverse", "Reverse the selected audio");
             buttonsX += 18;
-
-            tools = new DropdownButton("Tools...", buttonsX, buttonsY, 50, this);
-            tools.SetMenuItems([
-                new DropdownButton.Option("Delete", () => SelectionIsActive),
-                new DropdownButton.Option("Fade in",() => Sample.Length > 0),
-                new DropdownButton.Option("Fade out",() => Sample.Length > 0),
-                new DropdownButton.Option("Reverse",() => Sample.Length > 0),
-                new DropdownButton.Option("Invert",() => Sample.Length > 0),
-                new DropdownButton.Option("Normalize",() => Sample.Length > 0),
-                new DropdownButton.Option("Remove DC offset", () => Sample.Length > 0),
-                new DropdownButton.Option("Mix to mono", () => Sample.IsStereo),
-                new DropdownButton.Option("Amplify...", () => Sample.Length > 0),
-                new DropdownButton.Option("Bitcrush...", () => Sample.Length > 0)
-                ]);
 
             showInVisualizer = new CheckboxLabeled("Show in visualizer", 480, 245, 88, this);
             showInVisualizer.ShowCheckboxOnRight = true;
@@ -160,6 +172,7 @@ namespace WaveTracker.UI {
             undo.enabled = CanUndo;
             redo.enabled = CanRedo;
             delete.enabled = SelectionIsActive;
+            crop.enabled = SelectionIsActive;
             zoomIn.enabled = CanZoomIn && Sample.Length > 0;
             zoomOut.enabled = CanZoomOut && Sample.Length > 0;
             zoomInVertical.enabled = zoomLevelVertical < 50 && Sample.Length > 0;
@@ -230,6 +243,7 @@ namespace WaveTracker.UI {
                             null,
                             new SubMenu("Tools", new MenuItemBase[] {
                                 new MenuOption("Delete", Delete, SelectionIsActive),
+                                new MenuOption("Crop", Crop, SelectionIsActive),
                                 new MenuOption("Fade In", FadeIn),
                                 new MenuOption("Fade Out", FadeOut),
                                 new MenuOption("Reverse", Reverse),
@@ -285,6 +299,15 @@ namespace WaveTracker.UI {
                     AddToUndoHistory();
                 }
 
+                loopLength.enabled = Sample.loopType == Sample.LoopType.ForwardLoopOnly || Sample.loopType == Sample.LoopType.PingPongLoopOnly;
+                loopLength.SetValueLimits(0, Math.Max(0, Sample.Length - loopPoint.Value));
+                loopLength.Value = Sample.loopLength;
+                loopLength.Update();
+                if (loopLength.ValueWasChangedInternally) {
+                    Sample.loopLength = loopLength.Value;
+                    AddToUndoHistory();
+                }
+
                 if (undo.Clicked) {
                     Undo();
                 }
@@ -315,6 +338,9 @@ namespace WaveTracker.UI {
                 if (delete.Clicked) {
                     Delete();
                 }
+                if (crop.Clicked) {
+                    Crop();
+                }
 
                 tools.Update();
                 if (tools.SelectedAnItem) {
@@ -323,30 +349,33 @@ namespace WaveTracker.UI {
                             Delete();
                             break;
                         case 1:
-                            FadeIn();
+                            Crop();
                             break;
                         case 2:
-                            FadeOut();
+                            FadeIn();
                             break;
                         case 3:
-                            Reverse();
+                            FadeOut();
                             break;
                         case 4:
-                            Invert();
+                            Reverse();
                             break;
                         case 5:
-                            Normalize();
+                            Invert();
                             break;
                         case 6:
-                            RemoveDCOffset();
+                            Normalize();
                             break;
                         case 7:
-                            MixToMono();
+                            RemoveDCOffset();
                             break;
                         case 8:
-                            OpenAmplifier();
+                            MixToMono();
                             break;
                         case 9:
+                            OpenAmplifier();
+                            break;
+                        case 10:
                             OpenBitcrusher();
                             break;
 
@@ -482,6 +511,13 @@ namespace WaveTracker.UI {
             AddToUndoHistory();
         }
 
+        private void Crop() {
+            Sample.Delete(SelectionMax, Sample.Length);
+            Sample.Delete(0, SelectionMin);
+            SelectionIsActive = false;
+            AddToUndoHistory();
+        }
+
         private void Normalize() {
             if (SelectionIsActive) {
                 Sample.Normalize(SelectionMin, SelectionMax);
@@ -583,7 +619,7 @@ namespace WaveTracker.UI {
             else {
                 name = Sample.name + "  ";
             }
-            Write(name + "(" + Sample.Length + " samples)", waveformRegion.x, waveformRegion.y - 9, UIColors.label);
+            Write(name + "(" + Sample.Length + " samples at " + Sample.sampleRate + "k)", waveformRegion.x, waveformRegion.y - 9, UIColors.label);
             WriteRightAlign((Sample.Length / (float)AudioEngine.SampleRate).ToString("F5") + " seconds", waveformRegion.x + waveformRegion.width, waveformRegion.y - 9, UIColors.label);
 
             if (Sample.IsStereo && Sample.Length > 0) {
@@ -608,6 +644,9 @@ namespace WaveTracker.UI {
             if (Sample.loopType != Sample.LoopType.OneShot) {
                 loopPoint.Draw();
             }
+            if (Sample.loopType == Sample.LoopType.ForwardLoopOnly || Sample.loopType == Sample.LoopType.PingPongLoopOnly) {
+                loopLength.Draw();
+            }
             baseKey.Draw();
             fineTune.Draw();
             resamplingMode.Draw();
@@ -617,6 +656,7 @@ namespace WaveTracker.UI {
             undo.Draw();
             redo.Draw();
             delete.Draw();
+            crop.Draw();
             zoomIn.Draw();
             zoomOut.Draw();
             zoomInVertical.Draw();
@@ -643,8 +683,13 @@ namespace WaveTracker.UI {
                 if (SelectionIsActive) {
                     DrawRect(x + selectionMinX, y, selectionMaxX - selectionMinX, height, Helpers.Alpha(UIColors.selection, 128));
                 }
+         
                 int loopPosition = GetXPositionOfSample(Sample.loopPoint, width);
-                if (Sample.loopType != Sample.LoopType.OneShot) {
+                if (Sample.loopType == Sample.LoopType.ForwardLoopOnly || Sample.loopType == Sample.LoopType.PingPongLoopOnly) {
+                    int loopEndPosition = GetXPositionOfSample(Sample.loopPoint + Sample.loopLength, width);
+                    DrawRect(x + loopPosition, y, loopEndPosition - loopPosition, height, Helpers.Alpha(Color.Yellow, 50));
+                }
+                else if (Sample.loopType != Sample.LoopType.OneShot) {
                     DrawRect(x + loopPosition, y, width - loopPosition, height, Helpers.Alpha(Color.Yellow, 50));
                 }
 
@@ -705,7 +750,7 @@ namespace WaveTracker.UI {
                 if (Sample.loopType != Sample.LoopType.OneShot) {
                     DrawRect(x + loopPosition, y, 1, height, Color.Yellow);
                 }
-                if (Sample.currentPlaybackPosition < data.Length && ChannelManager.PreviewChannel.IsPlaying) {
+                if (Sample.currentPlaybackPosition < data.Length && ChannelManager.PreviewChannels[0].IsPlaying) {
                     DrawRect(x + GetXPositionOfSample(Sample.currentPlaybackPosition, width), y, 1, height, Color.Aqua);
                 }
                 if (waveformRegion.IsHovered) {
@@ -789,6 +834,7 @@ namespace WaveTracker.UI {
             private short[] channelRight;
             private Sample.LoopType loopType;
             private int loopPoint;
+            private int loopLength;
 
             public SampleEditorState(Sample sample) {
                 channelLeft = new short[sample.sampleDataL.Length];
@@ -796,6 +842,7 @@ namespace WaveTracker.UI {
                 channelRight = new short[sample.sampleDataR.Length];
                 Array.Copy(sample.sampleDataR, channelRight, sample.sampleDataR.Length);
                 loopPoint = sample.loopPoint;
+                loopLength = sample.loopLength;
                 loopType = sample.loopType;
             }
 
@@ -805,6 +852,7 @@ namespace WaveTracker.UI {
                 sample.sampleDataR = new short[channelRight.Length];
                 Array.Copy(channelRight, sample.sampleDataR, channelRight.Length);
                 sample.loopPoint = loopPoint;
+                sample.loopLength = loopLength;
                 sample.loopType = loopType;
             }
         }

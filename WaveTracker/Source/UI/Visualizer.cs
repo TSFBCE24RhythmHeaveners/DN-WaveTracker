@@ -164,7 +164,7 @@ namespace WaveTracker.UI {
                         }
                     }
                 }
-                chan = ChannelManager.PreviewChannel;
+                chan = ChannelManager.PreviewChannels[0];
                 channelStates[writeIndex][24].Clear();
                 if (!(chan.CurrentInstrument is SampleInstrument inst1 && !inst1.sample.useInVisualization) && chan.CurrentAmplitude > 0.0001f) {
                     if (chan.CurrentInstrument is WaveInstrument && chan.CurrentPitch >= 12 && chan.CurrentPitch <= 131) {
@@ -337,7 +337,7 @@ namespace WaveTracker.UI {
                 private Channel Channel {
                     get {
                         if (App.PatternEditor.cursorPosition.Channel == channelID && !ChannelManager.Channels[channelID].IsPlaying && !Playback.IsPlaying) {
-                            return ChannelManager.PreviewChannel;
+                            return ChannelManager.PreviewChannels[0];
                         }
                         else {
                             return ChannelManager.Channels[channelID];
@@ -382,7 +382,7 @@ namespace WaveTracker.UI {
                         if (Channel.CurrentInstrument is SampleInstrument instrument) {
                             Sample audioSample = instrument.sample;
                             for (float i = -width / 2; i < width / 2; i += 0.0625f) {
-                                sample = -audioSample.GetMonoSample(i / width * Channel.CurrentFrequency / scopezoom + (int)Channel.SampleTime, Channel.SampleStartOffset / 100f) * (height / 2f) * Channel.CurrentAmplitudeAsWave / 1.5f + height / 2f;
+                                sample = -audioSample.GetMonoSample(i / width * Channel.CurrentFrequency / scopezoom + (int)Channel.SampleTime, Channel.SampleStartOffset / 100f, Channel) * (height / 2f) * Channel.CurrentAmplitudeAsWave / 1.5f + height / 2f;
                                 if (first) {
                                     lastSample = sample;
                                     first = false;
@@ -397,7 +397,7 @@ namespace WaveTracker.UI {
                         else if (Channel.CurrentInstrument is WaveInstrument) {
                             for (float i = -width / 2; i < width / 2; i += 0.0625f) {
                                 position = i / width * Channel.CurrentFrequency / scopezoom;
-                                sample = (-Channel.EvaluateWave(position) * Channel.CurrentAmplitude * 0.5f + 0.5f) * height;
+                                sample = (-Channel.EvaluateWave(position, Channel) * Channel.CurrentAmplitude * 0.5f + 0.5f) * height;
                                 if (first) {
                                     lastSample = sample;
                                     first = false;

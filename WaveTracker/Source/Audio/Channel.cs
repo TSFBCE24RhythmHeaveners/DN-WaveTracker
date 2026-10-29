@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using WaveTracker.Tracker;
 
@@ -88,7 +90,10 @@ namespace WaveTracker.Audio {
         private float lastSampleL;
         private float lastSampleR;
         private StereoBiQuadFilter stereoBiQuadFilter; // Hxy command
+        private IRConvolution irConvolution; // Txx command
+        private Delay delay;
         private float _waveStretchSmooth;
+        public readonly ConcurrentDictionary<(int Frame, int Row), string> Errors = new ConcurrentDictionary<(int Frame, int Row), string>();
         public int SampleStartOffset { get; private set; } // Yxx command
 
         private int channelVolume; // volume column
@@ -112,6 +117,7 @@ namespace WaveTracker.Audio {
         private float targetFilterCutoffFrequency;
         private float _filterCutoffFrequency;
         private int currentInstrumentID;
+        private int irInstrumentId = -1;
 
         private double _noiseTime;
         private float noiseValueC;
@@ -128,6 +134,7 @@ namespace WaveTracker.Audio {
         }
 
         private static Envelope[] defaultEnvelopes;
+        private int delayParam;
 
         public static void InitializeNoise() {
             noiseSample = new float[44100 * 4];
@@ -151,6 +158,8 @@ namespace WaveTracker.Audio {
             }
             noiseLength = noiseSample.Length;
             stereoBiQuadFilter = new StereoBiQuadFilter();
+            irConvolution = new IRConvolution();
+            delay = new Delay();
             Reset();
         }
 
@@ -167,16 +176,16 @@ namespace WaveTracker.Audio {
 
         public int SamplePlaybackPosition { get; private set; }
 
-        public void QueueEvent(TickEventType eventType, int val1, int val2, int delay) {
+        public void QueueEvent(TickEventType eventType, int val1, int val2, int val3, int delay, int frame, int row) {
             if (delay < 0) {
-                DoEvent(new TickEvent(eventType, val1, val2, delay));
+                DoEvent(new TickEvent(eventType, val1, val2, val3, delay, frame, row));
             }
             else {
-                tickEvents.Add(new TickEvent(eventType, val1, val2, delay));
+                tickEvents.Add(new TickEvent(eventType, val1, val2, val3, delay, frame, row));
             }
         }
 
-        public void ApplyEffect(char command, int parameter) {
+        public void ApplyEffect(char command, int parameter, int instrumentId, int frame, int row) {
             switch (command) {
                 case '4':
                     if (parameter == 0) {
@@ -185,6 +194,10 @@ namespace WaveTracker.Audio {
 
                     vibratoSpeed = (parameter + 1) / 16;
                     vibratoIntensity = parameter % 16;
+                    break;
+
+                case '5':
+                    SetDelay(parameter);
                     break;
                 case '7':
                     tremoloSpeed = (parameter + 1) / 16;
@@ -246,12 +259,26 @@ namespace WaveTracker.Audio {
                     waveSyncAmt.patternValue = parameter;
                     break;
                 case 'X':
-                    downsampleFactor = parameter;
+                    // Normalized to x2 oversampling (base recommended value).
+                    // Compensates downsample effectiveness based on current oversampling.
+                    downsampleFactor = parameter * App.Settings.Audio.Oversampling / 2;
                     break;
                 case 'H':
                     SetFilter(Helpers.Map(parameter / 16, 0, 16, 1, 0.3f), Helpers.Map(parameter % 16, 0, 16, 1, 8));
                     break;
+                case 'T':
+                    SetIR(parameter, frame, row, instrumentId);
+                    break;
             }
+        }
+
+        public void SetDelay(int parameter) {
+            if (this.delayParam == parameter) {
+                return;
+            }
+
+            this.delayParam = parameter;
+            this.delay.SetParams((delayParam + 1) / 16, delayParam % 16);
         }
 
         public void SetVolume(int vol) {
@@ -364,6 +391,7 @@ namespace WaveTracker.Audio {
             tremoloMultiplier = 1f;
             tremoloSpeed = 0;
             tremoloTime = 0;
+            delayParam = 0;
             stereoPhaseOffset = 0;
             waveIndex.Reset(0);
             waveBlendAmt.Reset(0);
@@ -382,7 +410,10 @@ namespace WaveTracker.Audio {
             downsampleCounter = 0;
             downsampleFactor = 0;
             SetFilter(1, 1);
+            SetIR(-1, -1, -1, -1);
             SetPanning(0.5f);
+            SetDelay(0);
+            this.Errors.Clear();
         }
 
         public void SetFilter(float cutoffValue, float resonance) {
@@ -391,9 +422,38 @@ namespace WaveTracker.Audio {
             UpdateFilter();
         }
 
+        public void SetIR(int irInstrId, int frame, int row, int playbackInstrumentId) {
+            if (irInstrumentId == irInstrId) {
+                // TODO: reset buffers?
+                return;
+            }
+
+            irInstrumentId = irInstrId;
+            UpdateIR(frame, row, playbackInstrumentId);
+        }
+
         public void UpdateFilter() {
             _filterCutoffFrequency = targetFilterCutoffFrequency * Math.Min(20000, AudioEngine.SampleRate / 2f);
             stereoBiQuadFilter.SetLowpassFilter(AudioEngine.TrueSampleRate, _filterCutoffFrequency, filterResonance);
+        }
+
+        public void UpdateIR(int frame, int row, int playbackInstrumentId) {
+            Instrument playbackInstr = playbackInstrumentId == WTPattern.EVENT_EMPTY || playbackInstrumentId < 0 || playbackInstrumentId >= App.CurrentModule.Instruments.Count ? this.CurrentInstrument : App.CurrentModule.Instruments[playbackInstrumentId];
+            if (irInstrumentId > 0
+                && irInstrumentId < App.CurrentModule.Instruments.Count
+                && App.CurrentModule.Instruments[irInstrumentId] is SampleInstrument irSampleInstrument
+                && playbackInstr is SampleInstrument thisSampleInstrument
+                && irSampleInstrument.sample.sampleRate == thisSampleInstrument.sample.sampleRate)
+            {
+                irConvolution.SetIR(irSampleInstrument.sample.sampleDataL.Select(x => x / (float)short.MaxValue).ToArray());
+                this.Errors.TryRemove((frame, row), out _);
+            }
+            else
+            {
+                irConvolution.SetIR(new float[0]);
+                irInstrumentId = -1;
+                this.Errors.TryAdd((frame, row), "Err");
+            }
         }
 
         public void ResetModulations() {
@@ -480,7 +540,7 @@ namespace WaveTracker.Audio {
         /// </summary>
         public float CurrentFrequency { get; private set; }
 
-        public float EvaluateWave(float time) {
+        public float EvaluateWave(float time, Channel channel) {
             float s = waveSyncAmt.AdditiveValue / 99f * 8 + 1;
             if (time is < 0 or >= 1) {
                 time = Helpers.Mod(time, 1);
@@ -490,10 +550,10 @@ namespace WaveTracker.Audio {
                 time = Helpers.Mod(time, 1);
             }
             if (_fmSmooth > 0.001f) {
-                return CurrentWave.GetSampleMorphed(time + App.CurrentModule.WaveBank[(WaveIndex + 1) % 100].GetSampleAtPosition(time) * (_fmSmooth / 20f * (_fmSmooth / 20f)) / 2f, App.CurrentModule.WaveBank[(WaveIndex + 1) % 100], WaveMorphPosition, _waveStretchSmooth / 100f);
+                return CurrentWave.GetSampleMorphed(time + App.CurrentModule.WaveBank[(WaveIndex + 1) % 100].GetSampleAtPosition(time, this) * (_fmSmooth / 20f * (_fmSmooth / 20f)) / 2f, App.CurrentModule.WaveBank[(WaveIndex + 1) % 100], WaveMorphPosition, _waveStretchSmooth / 100f, this);
             }
             else {
-                return CurrentWave.GetSampleMorphed(time, App.CurrentModule.WaveBank[(WaveIndex + 1) % 100], WaveMorphPosition, _waveStretchSmooth / 100f);
+                return CurrentWave.GetSampleMorphed(time, App.CurrentModule.WaveBank[(WaveIndex + 1) % 100], WaveMorphPosition, _waveStretchSmooth / 100f, this);
 
             }
         }
@@ -683,7 +743,7 @@ namespace WaveTracker.Audio {
                 SetVolume(t.value);
             }
             if (t.eventType == TickEventType.Effect) {
-                ApplyEffect((char)t.value, t.value2);
+                ApplyEffect((char)t.value, t.value2, t.value3, t.frame, t.row);
             }
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -721,11 +781,11 @@ namespace WaveTracker.Audio {
                         }
 
                         if (stereoPhaseOffset != 0) {
-                            sampleL = EvaluateWave((float)_time - stereoPhaseOffset);
-                            sampleR = EvaluateWave((float)_time + stereoPhaseOffset);
+                            sampleL = EvaluateWave((float)_time - stereoPhaseOffset, this);
+                            sampleR = EvaluateWave((float)_time + stereoPhaseOffset, this);
                         }
                         else {
-                            sampleR = sampleL = EvaluateWave((float)_time);
+                            sampleR = sampleL = EvaluateWave((float)_time, this);
                         }
                     }
                     else if (CurrentInstrument is NoiseInstrument) {
@@ -748,7 +808,7 @@ namespace WaveTracker.Audio {
                         }
                     }
                     else if (CurrentInstrument is SampleInstrument) {
-                        CurrentSample?.SampleTick((float)_time, stereoPhaseOffset, SampleStartOffset / 100f, out sampleL, out sampleR);
+                        CurrentSample?.SampleTick((float)_time, stereoPhaseOffset, SampleStartOffset / 100f, this, out sampleL, out sampleR);
 
                         sampleL *= 1.25f;
                         sampleR *= 1.25f;
@@ -780,6 +840,10 @@ namespace WaveTracker.Audio {
                 float l = sampleL * _volumeSmooth * _leftAmp * _fadeMultiplier * freqCut;
                 float r = sampleR * _volumeSmooth * _rightAmp * _fadeMultiplier * freqCut;
                 stereoBiQuadFilter.Transform(l, r, out l, out r);
+
+                irConvolution.Transform(CurrentSample?.currentPlaybackPosition ?? 0, l, r, out l, out r);
+                delay.Transform(CurrentSample?.currentPlaybackPosition ?? 0, l, r, out l, out r);
+
                 left = l * 0.225f * bassBoost;
                 right = r * 0.225f * bassBoost;
                 if (id >= 0 && IsMuted) {

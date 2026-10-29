@@ -12,7 +12,7 @@ namespace WaveTracker.Tracker {
     [Serializable]
     [ProtoContract(SkipConstructor = true)]
     public class Sample {
-        public enum LoopType { OneShot, Forward, PingPong }
+        public enum LoopType { OneShot, Forward, PingPong, ForwardLoopOnly, PingPongLoopOnly }
 
         [ProtoMember(1)]
         private int resampleInt;
@@ -41,8 +41,12 @@ namespace WaveTracker.Tracker {
         [ProtoMember(11)]
         public string name;
 
+        [ProtoMember(12)]
+        public int loopLength;
+
         public Sample() {
             loopPoint = 0;
+            loopLength = 0;
 
             useInVisualization = false;
             sampleDataL = [];
@@ -77,7 +81,7 @@ namespace WaveTracker.Tracker {
             SetBaseFrequency();
         }
 
-        private void SetBaseFrequency() {
+        public void SetBaseFrequency() {
             BaseFrequency = Helpers.NoteToFrequency(BaseKey - Detune / 100f);
         }
 
@@ -227,70 +231,84 @@ namespace WaveTracker.Tracker {
             sampleDataR = newSampleDataR;
             if (loopPoint >= Length) {
                 loopPoint = 0;
+                loopLength = 0;
+                loopType = LoopType.OneShot;
+            }
+
+            if (loopPoint + loopLength >= Length) {
+                loopLength = 0;
                 loopType = LoopType.OneShot;
             }
         }
 
         public void TrimSilence() {
-            List<short> sampleDataLeft = sampleDataL.ToList();
-            List<short> sampleDataRight = sampleDataR.ToList();
-            if (sampleDataLeft.Count > 1000) {
+            int soundStartIndex = 0;
+            int soundEndIndex = sampleDataL.Length - 1;
+
+            if (sampleDataL.Length > 1000) {
                 if (IsStereo) {
-                    for (int i = 0; i < sampleDataLeft.Count; ++i) {
-                        if (Math.Abs(sampleDataLeft[i] / (float)short.MaxValue) > 0.001f || Math.Abs(sampleDataRight[i]) > 0.001f) {
+                    for (int i = 0; i < sampleDataL.Length; ++i) {
+                        if (Math.Abs(sampleDataL[i] / (float)short.MaxValue) > 0.001f
+                            || Math.Abs(sampleDataR[i] / (float)short.MaxValue) > 0.001f) {
                             break;
                         }
 
-                        sampleDataLeft.RemoveAt(i);
-                        sampleDataRight.RemoveAt(i);
+                        soundStartIndex = i;
                     }
 
-                    for (int i = sampleDataLeft.Count - 1; i >= 0; --i) {
-                        if (Math.Abs(sampleDataLeft[i] / (float)short.MaxValue) > 0.001f || Math.Abs(sampleDataRight[i]) > 0.001f) {
+                    for (int i = sampleDataL.Length - 1; i >= 0; --i) {
+                        if (Math.Abs(sampleDataL[i] / (float)short.MaxValue) > 0.001f
+                            || Math.Abs(sampleDataR[i] / (float)short.MaxValue) > 0.001f) {
                             break;
                         }
 
-                        sampleDataLeft.RemoveAt(i);
-                        sampleDataRight.RemoveAt(i);
+                        soundEndIndex = i;
                     }
                 }
                 else {
-                    for (int i = 0; i < sampleDataLeft.Count; ++i) {
-                        if (Math.Abs(sampleDataLeft[i] / (float)short.MaxValue) > 0.001f) {
+                    for (int i = 0; i < sampleDataL.Length; ++i) {
+                        if (Math.Abs(sampleDataL[i] / (float)short.MaxValue) > 0.001f) {
                             break;
                         }
 
-                        sampleDataLeft.RemoveAt(i);
+                        soundStartIndex = i;
                     }
 
-                    for (int i = sampleDataLeft.Count - 1; i >= 0; --i) {
-                        if (Math.Abs(sampleDataLeft[i] / (float)short.MaxValue) > 0.001f) {
+                    for (int i = sampleDataL.Length - 1; i >= 0; --i) {
+                        if (Math.Abs(sampleDataL[i] / (float)short.MaxValue) > 0.001f) {
                             break;
                         }
 
-                        sampleDataLeft.RemoveAt(i);
+                        soundEndIndex = i;
                     }
                 }
             }
 
-            sampleDataL = sampleDataLeft.ToArray();
-            sampleDataR = sampleDataRight.ToArray();
+            sampleDataL = sampleDataL.Skip(soundStartIndex).Take(soundEndIndex - soundStartIndex).ToArray();
+            sampleDataR = sampleDataR.Skip(soundStartIndex).Take(soundEndIndex - soundStartIndex).ToArray();
         }
 
-        public float GetMonoSample(float time, float startPercentage) {
-            SampleTick(time, 0, startPercentage, out float l, out float r);
+        public float GetMonoSample(float time, float startPercentage, Channel channel) {
+            SampleTick(time, 0, startPercentage, channel, out float l, out float r);
             return (l + r) / 2f;
         }
 
-        public void SampleTick(float time, float stereoPhase, float startPercentage, out float outputL, out float outputR) {
+        public void SampleTick(float time, float stereoPhase, float startPercentage, Channel channel, out float outputL, out float outputR) {
             float sampleIndex = 0;
             int stereo = (int)(stereoPhase * 1000);
             float x = time * (sampleRate / BaseFrequency);
             x += startPercentage * Length;
             long l = Length;
             long p = loopPoint;
-            if (loopType == LoopType.OneShot || x <= l) {
+            long lp = loopLength == 0 ? l : p + loopLength;
+            if (loopType == LoopType.OneShot || (x <= l && loopType != LoopType.ForwardLoopOnly && loopType != LoopType.PingPongLoopOnly)) {
                 sampleIndex = x;
+            }
+            else if (loopType == LoopType.Forward) {
+                sampleIndex = (x - p) % (l - p) + p;
+            }
+            else if (loopType == LoopType.ForwardLoopOnly) {
+                sampleIndex = x % (lp - p) + p;
             }
             else if (loopType == LoopType.PingPong) {
                 float b = (x - p) % ((l - p) * 2);
@@ -301,10 +319,19 @@ namespace WaveTracker.Tracker {
                     sampleIndex = l - (b + p - l);
                 }
             }
-            else if (loopType == LoopType.Forward) {
-                sampleIndex = (x - p) % (l - p) + p;
+            else if (loopType == LoopType.PingPongLoopOnly) {
+                float b = x % ((lp - p) * 2);
+                if (b < lp - p) {
+                    sampleIndex = b + p;
+                }
+                else if (b >= lp - p) {
+                    sampleIndex = lp - (b + p - lp);
+                }
             }
 
+            outputL = 0;
+            outputR = 0;
+            
             currentPlaybackPosition = (int)sampleIndex;
             if (resampleMode == ResamplingMode.None) {
                 outputL = GetSampleAt(0, (int)(sampleIndex + stereo));
@@ -317,7 +344,7 @@ namespace WaveTracker.Tracker {
                 outputL = MathHelper.Lerp(GetSampleAt(0, one + stereo), GetSampleAt(0, two + stereo), by);
                 outputR = MathHelper.Lerp(GetSampleAt(1, one - stereo), GetSampleAt(1, two - stereo), by);
             }
-            else {
+            else if (resampleMode == ResamplingMode.Mix) {
                 int one = (int)sampleIndex;
                 int two = one + 1;
                 float by = (float)(sampleIndex % 1f);
@@ -328,6 +355,9 @@ namespace WaveTracker.Tracker {
                 outputR += GetSampleAt(1, (int)sampleIndex - stereo);
                 outputL /= 2f;
                 outputR /= 2f;
+            }
+            else if (resampleMode == ResamplingMode.Smb) {
+                // channel.
             }
 
             outputL *= 1.5f;
@@ -377,6 +407,22 @@ namespace WaveTracker.Tracker {
             
             using (FileStream file = File.OpenWrite(filepath))
                 outWav.Write(file);
+        }
+
+        public Wav AsWav() {
+            short[] pcm16Samples = sampleDataL;
+            if (IsStereo) {
+                pcm16Samples = new short[2 * sampleDataL.Length];
+
+                for (int i = 0; i < sampleDataL.Length; i++) {
+                    pcm16Samples[2 * i] = sampleDataL[i];
+                    pcm16Samples[2 * i + 1] = sampleDataR[i];
+                }
+            }
+
+            int channels = IsStereo ? 2 : 1;
+
+            return new Wav(pcm16Samples, (ushort)channels, (uint)sampleRate);
         }
     }
 }
